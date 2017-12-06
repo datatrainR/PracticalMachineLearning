@@ -1,0 +1,121 @@
+---
+title: "Practical Machine Learning Homework"
+author: "datatrainR"
+date: "6 Dezember 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+Working with the Weight Lifting Exercises Dataset from Velloso et al. (2013), we want to use the power of machine learning with regards to classification to find the best model to predict whether weight lifting exercises were correctly conducted or not. Among a barrage of classification algorithms, the random forest method came out as the most precise predictor in our training data set and hence this is the one we apply to the test dataset provided.
+
+## Setup
+Data is downloaded directly from the web. Alongside the workhorse package **caret**, we also use **randomForest** and **rattle** (for plotting).
+```{r setup1, echo=TRUE, message=FALSE, warning=FALSE}
+##Downloading data
+setwd("E:/Lukas/Coursera/Data Specialization/machine_learning")
+add_training <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+add_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(add_training, destfile = "data_training.csv", method = "auto")
+download.file(add_test, destfile = "data_test.csv", method = "auto")
+
+training_data <- read.csv("data_training.csv", sep = ",", na.strings=c("NA","#DIV/0!", ""))
+test_data <- read.csv("data_test.csv", sep = ",", na.strings=c("NA","#DIV/0!", ""))
+
+##Packages
+library(caret)
+library(randomForest)
+library(RANN)
+library(rattle)
+```
+
+## Pre-Cleaning
+Before throwing everything into the machine learning grinders, we take a close look at our datasets. The *sapply* call reveals a large number of missing values (sometimes almost all observations are missing). We find that these are distributional informations for every measurement set which are only entered for one observation per measurement. While they do contain measurement accuracy, they wont help for future one-off measurements, so we drop them as well as all information on the recording time.
+
+```{r precleaning, echo=TRUE, message=FALSE, results="hide", warning=FALSE}
+sapply(training_data, function(x) sum(is.na(x)))
+NA_cols <- is.na(head(training_data,1))
+drop_cols <- names(training_data[,is.na(head(training_data,1))])
+drop_cols <- c(drop_cols,"X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window","num_window")
+
+training_data <- training_data[,!(names(training_data) %in% drop_cols)]
+test_data <- test_data[,!(names(test_data) %in% drop_cols)]
+```
+
+## Training the models
+Since we need to be able to compare the different models we are running, we re-partition the training set into two parts, keeping one aside for validation of the respective models.
+
+```{r repartitioning, echo=TRUE, message=FALSE, warning=FALSE}
+inTrain <- createDataPartition(training_data$classe, p = 3/4)[[1]]
+train <- training_data[inTrain, ]
+test <- training_data[-inTrain, ]
+```
+
+Then, using **caret**, we fit a support vector machine, a standard decision tree model, as well as two random forest models (one with normalized input data). As our outcome variable has 5 dimensions (oucome A being correct execution of the exercise and the others being different types of mistakes), we expect the nonlinear approaches to perform best.
+
+```{r training, echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+##Decision Tree model
+dectree_model1 <- train(classe~.,method="rpart",data=train)
+##Random Forest Model
+rf_model1 <- train(classe~.,method="rf",data=train,verbose=TRUE)
+rf_model2 <- train(classe~.,method="rf",preProcess = c("center", "scale"),data=train,verbose=TRUE)
+##Support Vector Model
+svm_model1 <- train(classe~.,method="svmLinear",preProcess = c("center", "scale"),data=train)
+save.image("E:/Lukas/Coursera/Data Specialization/machine_learning/workspace_training.RData")
+```
+
+Instead of actually running this, which might take ages, we load the results from a local drive
+```{r training_load, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
+load("E:/Lukas/Coursera/Data Specialization/machine_learning/workspace_training.RData")
+```
+
+Visualizing the output we find that the less computationally intensive decision tree model identified roll_belt, pitch_forarm, magnet_dumbbell_y, as well as roll_forearm as the best classifiers. These variables also appear among the ones with highest importance in the two random forest models with the most important classifier being roll_belt.
+
+```{r modelfits, echo=TRUE, eval=TRUE, message=FALSE,fig.width=7, fig.height=7}
+##Decision Tree model
+fancyRpartPlot(dectree_model1$finalModel)
+##Random Forest Model
+varimport1 <- varImp(rf_model1)$importance
+varimport2 <- varImp(rf_model2)$importance
+importance_df <- data.frame(names_raw=row.names(varimport1), raw = varimport1$Overall,names_normalized= row.names(varimport2),  normalized = varimport2$Overall)
+importance_df_ord <- importance_df[order(-importance_df$normalized),][1:10,]
+row.names(importance_df_ord) <- NULL
+print(importance_df_ord)
+```
+
+## Testing the models (cross-validation)
+
+We apply these four models to the portion of the training set that we kept for model selection. Looking at the accuracy figures, the most complex models prevailed in this out-of sample test. We decide to take the sligthly more accurate **Random Forest 1** which uses raw data inputs.
+```{r testing, echo=TRUE, eval=TRUE, message=FALSE, warning=FALSE}
+##Predictions
+dectree_fit <- predict(dectree_model1, newdata = test, type = "raw")
+rf_fit1 <- predict(rf_model1, newdata = test)
+rf_fit2 <- predict(rf_model2, newdata = test)
+svm_fit <- predict(svm_model1, newdata = test)
+
+##Confusion matrices
+#Decision Tree
+confusionMatrix(dectree_fit,test$classe)$overall[1]
+#Raw Random Forest
+confusionMatrix(rf_fit1,test$classe)$overall[1]
+#Normalized Random Forest
+confusionMatrix(rf_fit2,test$classe)$overall[1]
+#Support Vector Machine
+confusionMatrix(svm_fit,test$classe)$overall[1]
+
+##Winner Confusion Matrix
+confusionMatrix(rf_fit1,test$classe)$table
+```
+
+
+
+## Application to testing set
+
+We confidently apply our chosen random forest method to predict the exercise quality of the data from the original test-set.
+```{r final_pred, echo=TRUE, eval=TRUE, message=FALSE, warning=FALSE}
+predict(rf_model1, newdata = test_data)
+```
